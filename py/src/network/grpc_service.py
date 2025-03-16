@@ -12,10 +12,10 @@ from google.protobuf import empty_pb2
 
 from .generated import node_service_pb2 as pb2
 from .generated import node_service_pb2_grpc as pb2_grpc
-from ..core.node_manager import NodeManager
+from ..core.unified_node_manager import NodeManager
 from ..core.job_executor import JobExecutor
-from ..verification import VerificationSystem
-from ..payment import PaymentProcessor
+from ..verification.verification_system import AdvancedVerificationSystem
+from ..payment.monero_payment_processor import MoneroPaymentProcessor
 
 class NodeService(pb2_grpc.NodeServiceServicer):
     """Complete implementation of NodeService gRPC service"""
@@ -23,8 +23,8 @@ class NodeService(pb2_grpc.NodeServiceServicer):
     def __init__(self, 
                  node_manager: NodeManager,
                  job_executor: JobExecutor,
-                 verification_system: VerificationSystem,
-                 payment_processor: PaymentProcessor):
+                 verification_system: AdvancedVerificationSystem,
+                 payment_processor: MoneroPaymentProcessor):
         self.node_manager = node_manager
         self.job_executor = job_executor
         self.verification_system = verification_system
