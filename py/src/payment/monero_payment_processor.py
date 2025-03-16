@@ -4,10 +4,13 @@ import logging
 from typing import Dict
 import time
 from .monero_wallet import MoneroWallet
+from ..core.unified_node_manager import NodeManager
 
 class MoneroPaymentProcessor:
-    def __init__(self, wallet_config: Dict):
-        self.wallet_config = wallet_config
+    def __init__(self, config: Dict, node_manager: NodeManager):
+        self.config = config
+        self.node_manager = node_manager
+        self.wallet_config = config.get('wallet', {})
         self.escrow_records: Dict[str, Dict] = {}
         self.payment_records: Dict[str, Dict] = {}
         self.pending_transactions: Dict[str, str] = {}  # tx_id -> payment_id
@@ -15,14 +18,34 @@ class MoneroPaymentProcessor:
         self.logger = logging.getLogger(__name__)
         self._cleanup_task = None
         self._transaction_monitor_task = None
+        
+        # Payment settings
+        payment_config = config.get('payment', {})
+        self.base_rate = Decimal(str(payment_config.get('base_rate', '0.001')))  # XMR per verification
+        self.min_payment = Decimal(str(payment_config.get('min_payment', '0.0001')))
+        self.quality_multiplier = payment_config.get('quality_multiplier', 1.5)
+
+        # Background processing task
+        self.processing_task = None
+
+        logging.info("Initialized MoneroPaymentProcessor with verification payment support")
 
     async def start(self):
         """Start periodic escrow and transaction monitoring."""
         self._cleanup_task = asyncio.create_task(self._monitor_escrows())
         self._transaction_monitor_task = asyncio.create_task(self._monitor_transactions())
-        self.logger.info("Monero Payment Processor started.")
+        self.processing_task = asyncio.create_task(self._process_payment_queue())
+        logging.info("Started MoneroPaymentProcessor")
 
     async def stop(self):
+        """Stop the payment processor."""
+        if self.processing_task:
+            self.processing_task.cancel()
+            try:
+                await self.processing_task
+            except asyncio.CancelledError:
+                pass
+            self.processing_task = None
         """Stop monitoring tasks."""
         if self._cleanup_task:
             self._cleanup_task.cancel()
@@ -32,6 +55,130 @@ class MoneroPaymentProcessor:
             await self._transaction_monitor_task
         self.logger.info("Monero Payment Processor stopped.")
 
+    async def queue_verification_payment(self, verification_id: str, node_id: str, result: Dict):
+        """Queue a verification-based payment with quality-based adjustments."""
+        try:
+            # Estimate payment amount
+            payment_amount = self._calculate_payment_amount(result)
+            
+            # Store verification payment details
+            payment_info = {
+                "verification_id": verification_id,
+                "node_id": node_id,
+                "amount": payment_amount,
+                "timestamp": time.time()
+            }
+            
+            await self.payment_queue.put(payment_info)
+            self.verification_payments[verification_id] = payment_info
+
+            logging.info(f"Queued verification payment {verification_id} for {node_id}: {payment_amount} XMR")
+            return {
+                "status": "queued",
+                "verification_id": verification_id,
+                "amount": str(payment_amount)
+            }
+
+        except Exception as e:
+            logging.error(f"Error queuing verification payment: {str(e)}")
+            return {
+                "status": "error",
+                "error": str(e)
+            }
+        
+    async def _process_payment_queue(self):
+        """Process queued verification payments."""
+        try:
+            while True:
+                try:
+                    payment_info = await self.payment_queue.get()
+                    verification_id = payment_info["verification_id"]
+                    node_id = payment_info["node_id"]
+                    amount = payment_info["amount"]
+
+                    try:
+                        # Get node wallet address
+                        node_wallet = await self._get_node_address(node_id)
+
+                        # Send payment
+                        async with MoneroWallet(self.wallet_config) as wallet:
+                            transfer = await wallet.transfer(node_wallet, amount)
+
+                        # Store transaction
+                        payment_info["tx_id"] = transfer["tx_id"]
+                        self.pending_transactions[transfer["tx_id"]] = verification_id
+
+                        logging.info(f"Processed verification payment {verification_id}: {amount} XMR to {node_wallet}")
+
+                    except Exception as e:
+                        logging.error(f"Error processing verification payment {verification_id}: {str(e)}")
+                        payment_info["status"] = "failed"
+                        payment_info["error"] = str(e)
+
+                    finally:
+                        self.payment_queue.task_done()
+
+                except asyncio.CancelledError:
+                    break
+                except Exception as e:
+                    logging.error(f"Error in verification payment queue processing: {str(e)}")
+                    await asyncio.sleep(1)
+
+        except asyncio.CancelledError:
+            logging.info("Verification payment processor stopped")
+
+    async def check_payment_status(self, verification_id: str) -> Dict:
+        """Check status of a verification payment."""
+        try:
+            if verification_id in self.verification_payments:
+                payment_info = self.verification_payments[verification_id]
+                return {
+                    "status": "pending",
+                    "queued_at": payment_info["timestamp"],
+                    "amount": str(payment_info["amount"])
+                }
+
+            # Check completed transactions
+            for tx_id, v_id in self.pending_transactions.items():
+                if v_id == verification_id:
+                    async with MoneroWallet(self.wallet_config) as wallet:
+                        tx_status = await wallet.get_transfer_by_txid(tx_id)
+                        if tx_status:
+                            return {
+                                "status": "processing",
+                                "tx_status": tx_status["status"],
+                                "confirmations": tx_status.get("confirmations", 0),
+                                "amount": str(self.verification_payments[v_id]["amount"])
+                            }
+
+            return {"status": "not_found"}
+
+        except Exception as e:
+            logging.error(f"Error checking verification payment status: {str(e)}")
+            return {"status": "error", "error": str(e)}
+
+    def _calculate_payment_amount(self, result: Dict) -> Decimal:
+        """Calculate the final payment amount based on verification result quality."""
+        try:
+            base_payment = self.base_rate
+
+            # Quality-based scaling
+            quality_score = result.get("quality_score", 1.0)  # Default to max quality
+            quality_multiplier = 1.0 + ((quality_score - 0.5) * (self.quality_multiplier - 1.0))
+            base_payment *= Decimal(str(quality_multiplier))
+
+            # Resource usage factor
+            if "resource_usage" in result:
+                resource_factor = min(2.0, max(0.5, float(result["resource_usage"])))
+                base_payment *= Decimal(str(resource_factor))
+
+            # Ensure minimum payment
+            return max(self.min_payment, base_payment)
+
+        except Exception as e:
+            logging.error(f"Error calculating payment amount: {str(e)}")
+            return self.min_payment
+        
     async def process_verification_payment(self, job_id: str, node_id: str, amount: Decimal) -> Dict:
         """Process payment for verification results."""
         try:
@@ -114,6 +261,10 @@ class MoneroPaymentProcessor:
             logging.warning(f"Escrow for job {job_id} expired. Removing record.")
             del self.escrow_records[job_id]
             return False
+        
+        # Return cached balance if already verified
+        if "received_amount" in record:
+            return record["received_amount"] >= expected_amount
 
         async with MoneroWallet(self.wallet_config) as wallet:
             try:
