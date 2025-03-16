@@ -1,0 +1,74 @@
+# Data Distribution Configuration
+
+# Node & Network Settings
+network:
+  # Server configuration
+  server_host: "0.0.0.0"
+  server_port: 7000
+  
+  # Transfer protocol: "http" or "socket"
+  transfer_protocol: "socket"
+  
+  # Transfer parameters
+  transfer_chunk_size: 1048576  # 1MB
+  max_transfer_retries: 5
+  max_concurrent_transfers: 10
+  
+  # Node settings
+  node_inactive_timeout: 300    # 5 minutes
+  heartbeat_interval: 60        # 1 minute
+  
+  # Rebalancing settings
+  rebalance_interval: 3600      # 1 hour
+  rebalance_threshold: 0.2      # 20% imbalance triggers rebalance
+
+# Storage Settings
+storage:
+  # Path for shard storage
+  storage_dir: "data/shards"
+  
+  # Cache settings
+  max_cache_size: 1073741824    # 1GB
+  metrics_history_size: 1000
+  
+  # Cleanup settings
+  cleanup_interval: 86400       # 1 day
+  max_shard_age: 2592000        # 30 days
+
+# Security Settings
+security:
+  # Encryption settings (leave empty to disable)
+  encryption_key: ""            # Will generate automatically if empty
+  
+  # Authentication
+  require_auth: true
+  auth_token_validity: 86400    # 1 day
+
+# Performance Settings
+performance:
+  # Monitoring
+  metrics_interval: 60          # 1 minute
+  performance_log_interval: 300 # 5 minutes
+  
+  # Optimizations
+  compression_level: 6          # zlib compression level (0-9)
+  buffer_size: 8192             # Socket buffer size
+
+# Distribution Settings
+distribution:
+  # Default replication factor
+  default_replication_factor: 2
+  
+  # Minimum nodes required
+  min_nodes_required: 2
+  
+  # Node selection weights
+  selection_weights:
+    capacity: 0.4
+    connection_quality: 0.3
+    geographical_distance: 0.2
+    reliability_score: 0.1
+  
+  # Verification
+  verify_on_distribution: true
+  verify_on_retrieval: true

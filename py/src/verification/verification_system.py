@@ -67,6 +67,47 @@ class AdvancedVerificationSystem:
             logging.error(f"Error in advanced verification: {str(e)}")
             raise
 
+    async def verify_data_integrity(self, data_proof: Dict) -> Dict:
+        """Verify data integrity and processing steps"""
+        try:
+            # Validate proof structure
+            if not self._validate_data_proof_structure(data_proof):
+                return {
+                    'is_valid': False,
+                    'error': 'Invalid proof structure'
+                }
+                
+            # Verify source hash (if reference data available)
+            source_hash_valid = await self._verify_source_hash(
+                data_proof['source_hash'],
+                data_proof['data_id']
+            )
+            
+            # Verify processing steps
+            steps_valid = await self._verify_processing_steps(
+                data_proof['processing_steps']
+            )
+            
+            # Verify result hash matches expected (if available)
+            result_hash_valid = await self._verify_result_hash(
+                data_proof['result_hash'],
+                data_proof['data_id']
+            )
+            
+            return {
+                'is_valid': source_hash_valid and steps_valid and result_hash_valid,
+                'source_valid': source_hash_valid,
+                'steps_valid': steps_valid,
+                'result_valid': result_hash_valid
+            }
+            
+        except Exception as e:
+            logging.error(f"Data verification error: {str(e)}")
+            return {
+                'is_valid': False,
+                'error': str(e)
+            }
+
     def _verify_gradients(self, model: nn.Module) -> Tuple[bool, Dict]:
         """Verify gradient properties and patterns"""
         try:
