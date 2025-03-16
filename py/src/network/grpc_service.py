@@ -1,98 +1,174 @@
+"""
+gRPC service implementation for node network communication.
+"""
+
 import grpc
 from concurrent import futures
 import time
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 import asyncio
-from google.protobuf import empty_pb2
 import logging
+from google.protobuf import empty_pb2
 
 from .generated import node_service_pb2 as pb2
 from .generated import node_service_pb2_grpc as pb2_grpc
+from ..core.node_manager import NodeManager
+from ..core.job_executor import JobExecutor
+from ..verification import VerificationSystem
+from ..payment import PaymentProcessor
 
-class NodeServicer(pb2_grpc.NodeServiceServicer):
-    def __init__(self, node_manager, job_executor):
+class NodeService(pb2_grpc.NodeServiceServicer):
+    """Complete implementation of NodeService gRPC service"""
+    
+    def __init__(self, 
+                 node_manager: NodeManager,
+                 job_executor: JobExecutor,
+                 verification_system: VerificationSystem,
+                 payment_processor: PaymentProcessor):
         self.node_manager = node_manager
         self.job_executor = job_executor
-        self.active_nodes: Dict[str, float] = {}  # node_id -> last_heartbeat
-        self.verifier_pool = []
+        self.verification_system = verification_system
+        self.payment_processor = payment_processor
         
-    async def RegisterNode(self, request: pb2.NodeInfo, context) -> pb2.RegistrationResponse:
+        # Active node tracking
+        self.active_nodes: Dict[str, float] = {}  # node_id -> last_heartbeat
+        self.verifier_pool: List[str] = []
+        self.active_streams: Dict[int, bool] = {}
+        
+        logging.info("Initialized NodeService")
+
+    async def RegisterNode(self, request: pb2.NodeInfo, 
+                         context: grpc.aio.ServicerContext) -> pb2.RegistrationResponse:
         """Handle new node registration"""
         try:
-            # Validate node information
-            if not self._validate_node_info(request):
-                context.abort(grpc.StatusCode.INVALID_ARGUMENT, "Invalid node information")
-                
-            # Generate node ID and register
+            # Verify node identity
+            verification_result = await self.node_manager.verify_node_identity(
+                node_id=request.node_id,
+                registration_data={
+                    'gpu_info': self._convert_gpu_info(request.gpu_info),
+                    'network_capabilities': self._convert_network_capabilities(request.network_capabilities),
+                    'geographic_data': self._convert_geographic_data(request.geographic_data),
+                    'wallet_address': request.wallet_address,
+                    'pow_proof': request.pow_proof,
+                    'stake_transaction_id': request.stake_transaction_id
+                }
+            )
+
+            if not verification_result['verified']:
+                context.abort(grpc.StatusCode.FAILED_PRECONDITION, 
+                            verification_result.get('error', 'Verification failed'))
+
+            # Register node
             node_id = self._generate_node_id(request)
             self.active_nodes[node_id] = time.time()
-            
-            # Get bootstrap nodes
-            bootstrap_nodes = self._get_bootstrap_nodes()
-            
+
+            registration = await self.node_manager.register_node({
+                'node_id': node_id,
+                'version': request.version,
+                'gpu_info': self._convert_gpu_info(request.gpu_info),
+                'network_capabilities': self._convert_network_capabilities(request.network_capabilities),
+                'supported_frameworks': list(request.supported_frameworks),
+                'wallet_address': request.wallet_address
+            })
+
+            # Create response
             return pb2.RegistrationResponse(
                 assigned_node_id=node_id,
-                bootstrap_nodes=bootstrap_nodes,
-                network_config=self._get_network_config()
+                bootstrap_nodes=self._get_bootstrap_nodes(),
+                network_config=self._create_network_config(),
+                reputation_score=verification_result['reputation_score'],
+                pow_difficulty=verification_result['pow_difficulty'],
+                required_stake=str(verification_result['required_stake'])
             )
-        except Exception as e:
-            logging.error(f"Node registration failed: {str(e)}")
-            context.abort(grpc.StatusCode.INTERNAL, "Registration failed")
 
-    async def Heartbeat(self, request: pb2.NodeStatus, context) -> pb2.HeartbeatResponse:
-        """Process node heartbeat and status update"""
+        except Exception as e:
+            logging.error(f"Error in RegisterNode: {str(e)}")
+            context.abort(grpc.StatusCode.INTERNAL, str(e))
+
+    async def Heartbeat(self, request: pb2.NodeStatus, 
+                       context: grpc.aio.ServicerContext) -> pb2.HeartbeatResponse:
+        """Process node heartbeat"""
         try:
             node_id = request.node_id
             if node_id not in self.active_nodes:
                 context.abort(grpc.StatusCode.NOT_FOUND, "Node not registered")
-                
+
             # Update last heartbeat time
             self.active_nodes[node_id] = time.time()
-            
-            # Process status update
-            self._process_status_update(request)
-            
+
+            # Update node status
+            status_update = await self.node_manager.update_node_status(
+                node_id=node_id,
+                status={
+                    'gpu_metrics': self._convert_gpu_metrics(request.gpu_metrics),
+                    'active_jobs': [self._convert_job_status(j) for j in request.active_jobs],
+                    'network_metrics': self._convert_network_metrics(request.network_metrics)
+                }
+            )
+
             # Check for required actions
             actions = self._get_required_actions(node_id)
-            
+
             return pb2.HeartbeatResponse(
                 accepted=True,
                 actions_required=actions,
-                updated_config=self._get_network_config()
+                updated_config=self._create_network_config(status_update.get('config_updates'))
             )
+
         except Exception as e:
-            logging.error(f"Heartbeat processing failed: {str(e)}")
+            logging.error(f"Error in Heartbeat: {str(e)}")
             return pb2.HeartbeatResponse(accepted=False)
 
-    async def SubmitJob(self, request: pb2.JobSpecification, context) -> pb2.JobSubmissionResponse:
-        """Handle new job submission"""
+    async def SubmitJob(self, request: pb2.JobSpecification, 
+                       context: grpc.aio.ServicerContext) -> pb2.JobSubmissionResponse:
+        """Handle job submission"""
         try:
             # Validate job specification
             if not self._validate_job_spec(request):
                 context.abort(grpc.StatusCode.INVALID_ARGUMENT, "Invalid job specification")
-                
-            # Find suitable nodes for the job
+
+            # Convert job specification
+            job_spec = {
+                'job_id': request.job_id,
+                'framework': request.framework,
+                'model': self._convert_model_definition(request.model),
+                'training_config': self._convert_training_config(request.training_config),
+                'resource_requirements': self._convert_resource_requirements(request.resource_requirements),
+                'privacy_settings': self._convert_privacy_settings(request.privacy_settings),
+                'verification_config': self._convert_verification_config(request.verification_config),
+                'payment_details': self._convert_payment_details(request.payment_details)
+            }
+
+            # Find suitable nodes
             assigned_nodes = await self._assign_nodes(request)
             if not assigned_nodes:
                 context.abort(grpc.StatusCode.RESOURCE_EXHAUSTED, "No suitable nodes available")
-                
-            # Process payment details
-            payment_confirmation = await self._process_payment(request.payment_details)
-            
-            # Distribute job to assigned nodes
-            await self._distribute_job(request, assigned_nodes)
-            
-            return pb2.JobSubmissionResponse(
+
+            # Process payment
+            payment_confirmation = await self.payment_processor.process_job_payment(
                 job_id=request.job_id,
+                payment_details=self._convert_payment_details(request.payment_details)
+            )
+
+            # Distribute job
+            await self._distribute_job(job_spec, assigned_nodes)
+
+            # Submit job
+            submission_result = await self.node_manager.submit_job(job_spec)
+
+            return pb2.JobSubmissionResponse(
+                job_id=submission_result['job_id'],
                 assigned_nodes=assigned_nodes,
                 estimated_start_time=self._estimate_start_time(request),
-                payment_confirmation=payment_confirmation
+                payment_confirmation=self._create_payment_confirmation(payment_confirmation)
             )
-        except Exception as e:
-            logging.error(f"Job submission failed: {str(e)}")
-            context.abort(grpc.StatusCode.INTERNAL, "Job submission failed")
 
-    async def GetJobStatus(self, request: pb2.JobId, context) -> pb2.JobStatus:
+        except Exception as e:
+            logging.error(f"Error in SubmitJob: {str(e)}")
+            context.abort(grpc.StatusCode.INTERNAL, str(e))
+
+    async def GetJobStatus(self, request: pb2.JobId, 
+                          context: grpc.aio.ServicerContext) -> pb2.JobStatus:
         """Get current job status"""
         try:
             status = await self.job_executor.get_job_status(request.job_id)
@@ -103,171 +179,102 @@ class NodeServicer(pb2_grpc.NodeServiceServicer):
             logging.error(f"Get job status failed: {str(e)}")
             context.abort(grpc.StatusCode.INTERNAL, "Status retrieval failed")
 
-    async def StreamMetrics(self, request: empty_pb2.Empty, context) -> pb2.MetricsReport:
+    async def StreamMetrics(self, request: empty_pb2.Empty, 
+                          context: grpc.aio.ServicerContext) -> pb2.MetricsReport:
         """Stream real-time metrics"""
         try:
-            while True:
+            # Register stream
+            stream_id = id(context)
+            self.active_streams[stream_id] = True
+
+            while self.active_streams[stream_id]:
+                # Get current metrics
                 metrics = await self.node_manager.get_current_metrics()
+
+                # Create metrics report
                 yield pb2.MetricsReport(
                     node_id=self.node_manager.node_id,
-                    timestamp=metrics.timestamp,
-                    gpu_metrics=metrics.gpu_metrics,
-                    network_metrics=metrics.network_metrics,
-                    job_metrics=metrics.job_metrics
+                    timestamp=metrics['timestamp'],
+                    gpu_metrics=self._create_gpu_metrics(metrics['gpu']),
+                    network_metrics=self._create_network_metrics(metrics['network']),
+                    job_metrics=[self._create_job_metrics(j) for j in metrics['jobs']]
                 )
-                await asyncio.sleep(1)
-        except Exception as e:
-            logging.error(f"Metrics streaming failed: {str(e)}")
-            context.abort(grpc.StatusCode.INTERNAL, "Metrics streaming failed")
 
-    async def SubmitVerificationProof(self, request: pb2.VerificationProof, context) -> pb2.ProofValidation:
+                await asyncio.sleep(1)
+
+        except Exception as e:
+            logging.error(f"Error in StreamMetrics: {str(e)}")
+            self.active_streams.pop(stream_id, None)
+            context.abort(grpc.StatusCode.INTERNAL, str(e))
+
+    async def SubmitVerificationProof(self, request: pb2.VerificationProof, 
+                                    context: grpc.aio.ServicerContext) -> pb2.ProofValidation:
         """Handle verification proof submission"""
         try:
-            # Validate the proof
-            validation_result = await self._validate_proof(request)
-            
-            # Update node reputation if validation successful
-            if validation_result.valid:
-                await self._update_node_reputation(request.node_id, True)
-                
-            # Process payment update
-            payment_update = await self._process_verification_payment(request)
-            
-            return pb2.ProofValidation(
-                valid=validation_result.valid,
-                validation_id=validation_result.validation_id,
-                validator_signatures=validation_result.signatures,
-                payment_update=payment_update
-            )
-        except Exception as e:
-            logging.error(f"Proof validation failed: {str(e)}")
-            context.abort(grpc.StatusCode.INTERNAL, "Proof validation failed")
-
-    def _validate_node_info(self, node_info: pb2.NodeInfo) -> bool:
-        """Validate node information"""
-        # Implementation would check GPU capabilities, network requirements, etc.
-        pass
-
-    def _generate_node_id(self, node_info: pb2.NodeInfo) -> str:
-        """Generate unique node ID"""
-        # Implementation would create a unique identifier
-        pass
-
-    def _get_bootstrap_nodes(self) -> list:
-        """Get list of bootstrap nodes"""
-        # Implementation would return active nodes for bootstrapping
-        pass
-
-    def _get_network_config(self) -> pb2.NetworkConfiguration:
-        """Get current network configuration"""
-        # Implementation would return network settings
-        pass
-
-    async def _assign_nodes(self, job_spec: pb2.JobSpecification) -> list:
-        """Find suitable nodes for job execution"""
-        # Implementation would match job requirements with available nodes
-        pass
-
-    async def _process_payment(self, payment_details: pb2.PaymentDetails) -> pb2.PaymentConfirmation:
-        """Process payment for job submission"""
-        try:
-            # Verify payment amount matches resource requirements
-            if not self._verify_payment_amount(payment_details):
-                raise ValueError("Insufficient payment amount")
-                
-            # Create escrow transaction
-            escrow_address = self._create_escrow_address()
-            transaction_id = await self._create_escrow_transaction(
-                payment_details.amount,
-                escrow_address,
-                payment_details.currency
-            )
-            
-            return pb2.PaymentConfirmation(
-                transaction_id=transaction_id,
-                escrow_address=escrow_address,
-                amount_locked=payment_details.amount
-            )
-        except Exception as e:
-            logging.error(f"Payment processing failed: {str(e)}")
-            raise
-
-    async def _distribute_job(self, job_spec: pb2.JobSpecification, assigned_nodes: list):
-        """Distribute job to assigned nodes"""
-        try:
-            # Create job distribution tasks
-            distribution_tasks = []
-            for node_id in assigned_nodes:
-                task = self._send_job_to_node(node_id, job_spec)
-                distribution_tasks.append(task)
-            
-            # Wait for all distributions to complete
-            await asyncio.gather(*distribution_tasks)
-            
-            # Initialize job tracking
-            await self._initialize_job_tracking(job_spec.job_id, assigned_nodes)
-        except Exception as e:
-            logging.error(f"Job distribution failed: {str(e)}")
-            # Cleanup and revert assignments
-            await self._cleanup_failed_distribution(job_spec.job_id, assigned_nodes)
-            raise
-
-    async def _send_job_to_node(self, node_id: str, job_spec: pb2.JobSpecification):
-        """Send job to specific node"""
-        try:
-            # Get node connection
-            node_channel = await self._get_node_channel(node_id)
-            
-            # Create job submission request
-            job_request = self._prepare_job_request(job_spec, node_id)
-            
-            # Send job to node
-            stub = pb2_grpc.NodeServiceStub(node_channel)
-            response = await stub.SubmitJob(job_request)
-            
-            # Verify response
-            if not response.accepted:
-                raise Exception(f"Node {node_id} rejected job")
-                
-            return response
-        except Exception as e:
-            logging.error(f"Failed to send job to node {node_id}: {str(e)}")
-            raise
-
-    async def _validate_proof(self, proof: pb2.VerificationProof):
-        """Validate computation proof"""
-        try:
             # Select verifier nodes
-            verifiers = self._select_verifier_nodes(proof.job_id)
-            
+            verifiers = self._select_verifier_nodes(request.job_id)
+
             # Create verification tasks
             verification_tasks = []
             for verifier_id in verifiers:
-                task = self._verify_proof_with_node(verifier_id, proof)
+                task = self._verify_proof_with_node(verifier_id, request)
                 verification_tasks.append(task)
-            
+
             # Wait for verification results
             results = await asyncio.gather(*verification_tasks)
-            
-            # Aggregate verification results
-            validation_result = self._aggregate_verification_results(results)
-            
-            return validation_result
-        except Exception as e:
-            logging.error(f"Proof validation failed: {str(e)}")
-            raise
 
-    def _select_verifier_nodes(self, job_id: str) -> list:
-        """Select nodes for proof verification"""
-        # Implementation of verifier selection strategy
-        # Could consider node reputation, availability, and past performance
-        verifiers = []
-        for node_id, last_heartbeat in self.active_nodes.items():
-            if self._is_node_eligible_verifier(node_id, job_id):
-                verifiers.append(node_id)
-            if len(verifiers) >= 3:  # Use configurable number of verifiers
-                break
-        return verifiers
+            # Aggregate results
+            validation_result = self._aggregate_verification_results(results)
+
+            # Update node reputation if valid
+            if validation_result.valid:
+                await self._update_node_reputation(request.node_id, True)
+
+            # Process payment if valid
+            payment_update = None
+            if validation_result.valid:
+                payment_update = await self.payment_processor.process_verification_payment(
+                    job_id=request.job_id,
+                    node_id=context.peer(),
+                    amount=self._calculate_verification_payment(validation_result)
+                )
+
+            return pb2.ProofValidation(
+                valid=validation_result.valid,
+                validation_id=validation_result.validation_id,
+                validator_signatures=validation_result.validator_signatures,
+                payment_update=self._create_payment_update(payment_update) if payment_update else None
+            )
+
+        except Exception as e:
+            logging.error(f"Error in SubmitVerificationProof: {str(e)}")
+            context.abort(grpc.StatusCode.INTERNAL, str(e))
+
+    # Helper methods from first implementation
+    def _generate_node_id(self, node_info: pb2.NodeInfo) -> str:
+        """Generate unique node ID"""
+        import hashlib
+        import uuid
+        
+        # Combine node info with UUID for uniqueness
+        node_data = f"{node_info.gpu_model}:{node_info.wallet_address}:{uuid.uuid4()}"
+        return hashlib.sha256(node_data.encode()).hexdigest()[:16]
+
+    def _get_bootstrap_nodes(self) -> List[str]:
+        """Get list of bootstrap nodes"""
+        return [node_id for node_id, last_heartbeat in self.active_nodes.items()
+                if time.time() - last_heartbeat < 300]  # Active in last 5 minutes
+
+    def _get_required_actions(self, node_id: str) -> List[str]:
+        """Get list of required actions for node"""
+        actions = []
+        
+        # Check if verification is needed
+        if node_id in self.verifier_pool:
+            actions.append('VERIFICATION_NEEDED')
+            
+        # Add other action checks as needed
+        return actions
 
     async def _verify_proof_with_node(self, verifier_id: str, proof: pb2.VerificationProof):
         """Send proof to verifier node for validation"""
@@ -291,77 +298,197 @@ class NodeServicer(pb2_grpc.NodeServiceServicer):
             logging.error(f"Verification with node {verifier_id} failed: {str(e)}")
             raise
 
-    def _aggregate_verification_results(self, results: list) -> pb2.ProofValidation:
-        """Aggregate verification results from multiple verifiers"""
-        # Count positive validations
-        valid_count = sum(1 for result in results if result.verified)
-        
-        # Decision based on majority
-        is_valid = valid_count > len(results) / 2
-        
-        # Collect signatures from validators
-        validator_signatures = []
-        for result in results:
-            if result.verified:
-                validator_signatures.extend(result.verifier_nodes)
-        
-        return pb2.ProofValidation(
-            valid=is_valid,
-            validation_id=f"val_{time.time()}",
-            validator_signatures=validator_signatures
+    def _select_verifier_nodes(self, job_id: str) -> list:
+        """Select nodes for proof verification"""
+        verifiers = []
+        for node_id, last_heartbeat in self.active_nodes.items():
+            if self._is_node_eligible_verifier(node_id, job_id):
+                verifiers.append(node_id)
+            if len(verifiers) >= 3:  # Use configurable number of verifiers
+                break
+        return verifiers
+
+    async def _distribute_job(self, job_spec: Dict, assigned_nodes: List[str]):
+        """Distribute job to assigned nodes"""
+        try:
+            # Create job distribution tasks
+            distribution_tasks = []
+            for node_id in assigned_nodes:
+                task = self._send_job_to_node(node_id, job_spec)
+                distribution_tasks.append(task)
+            
+            # Wait for all distributions to complete
+            await asyncio.gather(*distribution_tasks)
+            
+            # Initialize job tracking
+            await self._initialize_job_tracking(job_spec['job_id'], assigned_nodes)
+        except Exception as e:
+            logging.error(f"Job distribution failed: {str(e)}")
+            # Cleanup and revert assignments
+            await self._cleanup_failed_distribution(job_spec['job_id'], assigned_nodes)
+            raise
+
+    def _convert_model_definition(model: pb2.ModelDefinition) -> Dict:
+        """Convert protobuf ModelDefinition to internal format"""
+        return {
+            'model_format': model.model_format,
+            'model_data': bytes(model.model_data),
+            'hyperparameters': dict(model.hyperparameters),
+            'required_packages': list(model.required_packages)
+        }
+
+    def _convert_training_config(config: pb2.TrainingConfig) -> Dict:
+        """Convert protobuf TrainingConfig to internal format"""
+        return {
+            'epochs': config.epochs,
+            'batch_size': config.batch_size,
+            'optimizer': config.optimizer,
+            'optimizer_config': dict(config.optimizer_config),
+            'metrics': list(config.metrics),
+            'checkpoint_config': _convert_checkpoint_config(config.checkpoint_config)
+        }
+
+    def _convert_checkpoint_config(config: pb2.CheckpointConfig) -> Dict:
+        """Convert protobuf CheckpointConfig to internal format"""
+        return {
+            'save_interval': config.save_interval,
+            'max_checkpoints': config.max_checkpoints,
+            'save_path': config.save_path
+        }
+
+    def _convert_resource_requirements(requirements: pb2.ResourceRequirements) -> Dict:
+        """Convert protobuf ResourceRequirements to internal format"""
+        return {
+            'min_memory': requirements.min_memory,
+            'min_compute_capability': requirements.min_compute_capability,
+            'max_batch_size': requirements.max_batch_size,
+            'expected_duration_seconds': requirements.expected_duration_seconds
+        }
+
+    def _convert_privacy_settings(settings: pb2.PrivacySettings) -> Dict:
+        """Convert protobuf PrivacySettings to internal format"""
+        return {
+            'require_secure_enclave': settings.require_secure_enclave,
+            'enable_federated_learning': settings.enable_federated_learning,
+            'encryption_method': settings.encryption_method,
+            'encryption_key': bytes(settings.encryption_key)
+        }
+
+    def _convert_verification_config(config: pb2.VerificationConfig) -> Dict:
+        """Convert protobuf VerificationConfig to internal format"""
+        return {
+            'verification_interval': config.verification_interval,
+            'required_verifiers': config.required_verifiers,
+            'verification_timeout': config.verification_timeout,
+            'verification_reward': str(config.verification_reward)
+        }
+
+    def _convert_payment_details(details: pb2.PaymentDetails) -> Dict:
+        """Convert protobuf PaymentDetails to internal format"""
+        return {
+            'payment_id': details.payment_id,
+            'currency': details.currency,
+            'amount': str(details.amount),
+            'recipient_address': details.recipient_address,
+            'conditions': _convert_payment_conditions(details.conditions)
+        }
+
+    def _convert_payment_conditions(conditions: pb2.PaymentConditions) -> Dict:
+        """Convert protobuf PaymentConditions to internal format"""
+        return {
+            'min_uptime': conditions.min_uptime,
+            'min_verification_rate': conditions.min_verification_rate,
+            'payment_interval_seconds': conditions.payment_interval_seconds,
+            'performance_multiplier': conditions.performance_multiplier
+        }
+
+    def _convert_job_status(status: pb2.JobStatus) -> Dict:
+        """Convert protobuf JobStatus to internal format"""
+        return {
+            'job_id': status.job_id,
+            'status': status.status,
+            'progress': status.progress,
+            'current_metrics': dict(status.current_metrics),
+            'last_update': status.last_update.timestamp(),
+            'active_nodes': list(status.active_nodes)
+        }
+
+    def _create_gpu_metrics(metrics: Dict) -> pb2.GPUMetrics:
+        """Create protobuf GPUMetrics from internal format"""
+        return pb2.GPUMetrics(
+            memory_used=metrics.get('memory_used', 0),
+            memory_total=metrics.get('memory_total', 0),
+            utilization=metrics.get('utilization', 0),
+            temperature=metrics.get('temperature', 0),
+            power_usage=metrics.get('power_usage', 0),
+            custom_metrics=metrics.get('custom_metrics', {})
         )
 
-    async def _update_node_reputation(self, node_id: str, success: bool):
-        """Update node reputation based on verification result"""
-        try:
-            # Get current reputation
-            current_reputation = await self._get_node_reputation(node_id)
-            
-            # Update based on success/failure
-            new_reputation = self._calculate_new_reputation(
-                current_reputation,
-                success
-            )
-            
-            # Store updated reputation
-            await self._store_node_reputation(node_id, new_reputation)
-            
-            # Update node rankings
-            await self._update_node_rankings()
-        except Exception as e:
-            logging.error(f"Reputation update failed: {str(e)}")
-            raise
+    def _create_network_metrics(metrics: Dict) -> pb2.NetworkMetrics:
+        """Create protobuf NetworkMetrics from internal format"""
+        return pb2.NetworkMetrics(
+            bandwidth_usage=metrics.get('bandwidth_usage', 0),
+            active_connections=metrics.get('active_connections', 0),
+            latency_ms=metrics.get('latency_ms', 0),
+            bytes_transferred=metrics.get('bytes_transferred', 0)
+        )
 
-    async def _process_verification_payment(self, proof: pb2.VerificationProof) -> pb2.PaymentUpdate:
-        """Process payment update based on verification"""
-        try:
-            # Calculate payment amount
-            payment_amount = self._calculate_payment_amount(proof)
-            
-            # Release payment from escrow
-            transaction_id = await self._release_escrow_payment(
-                proof.job_id,
-                payment_amount
-            )
-            
-            # Update payment tracking
-            await self._update_payment_tracking(proof.job_id, payment_amount)
-            
-            return pb2.PaymentUpdate(
-                payment_id=f"pay_{time.time()}",
-                amount_released=payment_amount,
-                transaction_id=transaction_id,
-                reputation_change=0.1  # Would be calculated based on performance
-            )
-        except Exception as e:
-            logging.error(f"Payment processing failed: {str(e)}")
-            raise
+    def _create_job_metrics(metrics: Dict) -> pb2.JobMetrics:
+        """Create protobuf JobMetrics from internal format"""
+        return pb2.JobMetrics(
+            job_id=metrics.get('job_id', ''),
+            training_metrics=metrics.get('training_metrics', {}),
+            resource_usage=_create_resource_usage(metrics.get('resource_usage', {}))
+        )
 
-    def _calculate_payment_amount(self, proof: pb2.VerificationProof) -> float:
-        """Calculate payment amount based on work performed"""
-        # Implementation would consider:
-        # - Resource usage
-        # - Time spent
-        # - Quality of results
-        # - Node reputation
-        pass
+    def _create_resource_usage(usage: Dict) -> pb2.ResourceUsage:
+        """Create protobuf ResourceUsage from internal format"""
+        return pb2.ResourceUsage(
+            gpu_memory_percent=usage.get('gpu_memory_percent', 0),
+            gpu_utilization=usage.get('gpu_utilization', 0),
+            network_usage=usage.get('network_usage', 0),
+            data_processed=usage.get('data_processed', 0)
+        )
+
+    def _create_payment_confirmation(confirmation: Dict) -> pb2.PaymentConfirmation:
+        """Create protobuf PaymentConfirmation from internal format"""
+        return pb2.PaymentConfirmation(
+            transaction_id=confirmation.get('transaction_id', ''),
+            escrow_address=confirmation.get('escrow_address', ''),
+            amount_locked=float(confirmation.get('amount_locked', 0))
+        )
+
+    def _create_payment_update(update: Dict) -> pb2.PaymentUpdate:
+        """Create protobuf PaymentUpdate from internal format"""
+        return pb2.PaymentUpdate(
+            payment_id=update.get('payment_id', ''),
+            amount_released=float(update.get('amount_released', 0)),
+            transaction_id=update.get('transaction_id', ''),
+            reputation_change=update.get('reputation_change', 0)
+        )
+
+    def _validate_job_spec(spec: pb2.JobSpecification) -> bool:
+        """Validate job specification completeness and correctness"""
+        try:
+            # Check required fields
+            if not spec.job_id or not spec.framework:
+                return False
+                
+            # Validate model definition
+            if not spec.model.model_data:
+                return False
+                
+            # Validate training config
+            if spec.training_config.epochs <= 0 or spec.training_config.batch_size <= 0:
+                return False
+                
+            # Validate resource requirements
+            if spec.resource_requirements.min_memory <= 0:
+                return False
+                
+            # All validations passed
+            return True
+            
+        except Exception as e:
+            logging.error(f"Error validating job spec: {str(e)}")
+            return False
