@@ -79,7 +79,7 @@ class JobVerificationContext:
     deadline: float = None
 
 
-class UnifiedVerificationSystem:
+class VerificationSystem:
     """Comprehensive verification system that combines layer, data and model verification"""
     
     def __init__(self, config: Dict):
