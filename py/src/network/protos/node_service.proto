@@ -1,0 +1,241 @@
+// node_service.proto
+syntax = "proto3";
+
+package decentralized_gpu;
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/empty.proto";
+
+// Core service for node-to-node communication
+service NodeService {
+  // Node registration and heartbeat
+  rpc RegisterNode(NodeInfo) returns (RegistrationResponse);
+  rpc Heartbeat(NodeStatus) returns (HeartbeatResponse);
+  
+  // Job management
+  rpc SubmitJob(JobSpecification) returns (JobSubmissionResponse);
+  rpc GetJobStatus(JobId) returns (JobStatus);
+  rpc CancelJob(JobId) returns (google.protobuf.Empty);
+  
+  // Resource and metrics reporting
+  rpc ReportMetrics(MetricsReport) returns (google.protobuf.Empty);
+  rpc StreamMetrics(google.protobuf.Empty) returns (stream MetricsReport);
+  
+  // Verification protocol
+  rpc SubmitVerificationProof(VerificationProof) returns (ProofValidation);
+  rpc RequestVerification(VerificationRequest) returns (VerificationResponse);
+}
+
+// Node identification and capabilities
+message NodeInfo {
+  string node_id = 1;
+  string version = 2;
+  GPUInfo gpu_info = 3;
+  NetworkCapabilities network_capabilities = 4;
+  repeated string supported_frameworks = 5;
+  string wallet_address = 6;
+}
+
+message GPUInfo {
+  string gpu_model = 1;
+  uint64 memory_total = 2;
+  uint32 compute_capability_major = 3;
+  uint32 compute_capability_minor = 4;
+  repeated string supported_precisions = 5;
+  uint32 cuda_cores = 6;
+  uint32 tensor_cores = 7;
+}
+
+message NetworkCapabilities {
+  uint32 max_bandwidth = 1;
+  bool supports_p2p = 2;
+  repeated string supported_protocols = 3;
+}
+
+message RegistrationResponse {
+  string assigned_node_id = 1;
+  repeated string bootstrap_nodes = 2;
+  NetworkConfiguration network_config = 3;
+}
+
+// Job specification and management
+message JobSpecification {
+  string job_id = 1;
+  string framework = 2;
+  ModelDefinition model = 3;
+  TrainingConfig training_config = 4;
+  ResourceRequirements resource_requirements = 5;
+  PrivacySettings privacy_settings = 6;
+  VerificationConfig verification_config = 7;
+  PaymentDetails payment_details = 8;
+}
+
+message ModelDefinition {
+  string model_format = 1;
+  bytes model_data = 2;
+  map<string, string> hyperparameters = 3;
+  repeated string required_packages = 4;
+}
+
+message TrainingConfig {
+  uint32 epochs = 1;
+  uint32 batch_size = 2;
+  string optimizer = 3;
+  map<string, float> optimizer_config = 4;
+  repeated string metrics = 5;
+  CheckpointConfig checkpoint_config = 6;
+}
+
+message ResourceRequirements {
+  uint64 min_memory = 1;
+  float min_compute_capability = 2;
+  uint32 max_batch_size = 3;
+  uint32 expected_duration_seconds = 4;
+}
+
+message PrivacySettings {
+  bool require_secure_enclave = 1;
+  bool enable_federated_learning = 2;
+  string encryption_method = 3;
+  bytes encryption_key = 4;
+}
+
+// Metrics and status reporting
+message NodeStatus {
+  string node_id = 1;
+  google.protobuf.Timestamp timestamp = 2;
+  GPUMetrics gpu_metrics = 3;
+  repeated JobStatus active_jobs = 4;
+  NetworkMetrics network_metrics = 5;
+}
+
+message GPUMetrics {
+  uint64 memory_used = 1;
+  uint64 memory_total = 2;
+  float utilization = 3;
+  float temperature = 4;
+  float power_usage = 5;
+  map<string, float> custom_metrics = 6;
+}
+
+message NetworkMetrics {
+  float bandwidth_usage = 1;
+  uint32 active_connections = 2;
+  float latency_ms = 3;
+  uint64 bytes_transferred = 4;
+}
+
+// Verification protocol messages
+message VerificationProof {
+  string job_id = 1;
+  uint32 checkpoint_id = 2;
+  bytes state_hash = 3;
+  bytes proof_data = 4;
+  map<string, float> metrics = 5;
+  google.protobuf.Timestamp timestamp = 6;
+}
+
+message VerificationRequest {
+  string job_id = 1;
+  uint32 checkpoint_id = 2;
+  bytes challenge_data = 3;
+}
+
+message VerificationResponse {
+  bool verified = 1;
+  string verification_id = 2;
+  repeated string verifier_nodes = 3;
+  bytes verification_data = 4;
+}
+
+// Payment and incentive messages
+message PaymentDetails {
+  string payment_id = 1;
+  string currency = 2;
+  float amount = 3;
+  string recipient_address = 4;
+  PaymentConditions conditions = 5;
+}
+
+message PaymentConditions {
+  float min_uptime = 1;
+  float min_verification_rate = 2;
+  uint32 payment_interval_seconds = 3;
+  float performance_multiplier = 4;
+}
+
+// Response messages
+message JobSubmissionResponse {
+  string job_id = 1;
+  repeated string assigned_nodes = 2;
+  google.protobuf.Timestamp estimated_start_time = 3;
+  PaymentConfirmation payment_confirmation = 4;
+}
+
+message HeartbeatResponse {
+  bool accepted = 1;
+  repeated string actions_required = 2;
+  NetworkConfiguration updated_config = 3;
+}
+
+message ProofValidation {
+  bool valid = 1;
+  string validation_id = 2;
+  repeated string validator_signatures = 3;
+  PaymentUpdate payment_update = 4;
+}
+
+// Utility messages
+message JobId {
+  string job_id = 1;
+}
+
+message JobStatus {
+  string job_id = 1;
+  string status = 2;
+  float progress = 3;
+  map<string, float> current_metrics = 4;
+  google.protobuf.Timestamp last_update = 5;
+  repeated string active_nodes = 6;
+}
+
+message NetworkConfiguration {
+  repeated string allowed_protocols = 1;
+  uint32 max_connections = 2;
+  uint32 heartbeat_interval_seconds = 3;
+  map<string, string> protocol_config = 4;
+}
+
+message PaymentConfirmation {
+  string transaction_id = 1;
+  string escrow_address = 2;
+  float amount_locked = 3;
+}
+
+message PaymentUpdate {
+  string payment_id = 1;
+  float amount_released = 2;
+  string transaction_id = 3;
+  float reputation_change = 4;
+}
+
+message MetricsReport {
+  string node_id = 1;
+  google.protobuf.Timestamp timestamp = 2;
+  GPUMetrics gpu_metrics = 3;
+  NetworkMetrics network_metrics = 4;
+  repeated JobMetrics job_metrics = 5;
+}
+
+message JobMetrics {
+  string job_id = 1;
+  map<string, float> training_metrics = 2;
+  ResourceUsage resource_usage = 3;
+}
+
+message ResourceUsage {
+  float gpu_memory_percent = 1;
+  float gpu_utilization = 2;
+  float network_usage = 3;
+  uint64 data_processed = 4;
+}

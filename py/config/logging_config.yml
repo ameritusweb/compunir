@@ -1,0 +1,97 @@
+version: 1
+disable_existing_loggers: false
+
+formatters:
+  standard:
+    format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    datefmt: "%Y-%m-%d %H:%M:%S"
+  
+  detailed:
+    format: "%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s"
+    datefmt: "%Y-%m-%d %H:%M:%S"
+  
+  json:
+    class: pythonjsonlogger.jsonlogger.JsonFormatter
+    format: "%(asctime)s %(name)s %(levelname)s %(filename)s %(lineno)d %(message)s"
+
+handlers:
+  console:
+    class: logging.StreamHandler
+    level: INFO
+    formatter: standard
+    stream: ext://sys.stdout
+
+  file:
+    class: logging.handlers.RotatingFileHandler
+    level: DEBUG
+    formatter: detailed
+    filename: logs/node.log
+    maxBytes: 10485760  # 10MB
+    backupCount: 5
+    encoding: utf8
+
+  error_file:
+    class: logging.handlers.RotatingFileHandler
+    level: ERROR
+    formatter: detailed
+    filename: logs/error.log
+    maxBytes: 10485760  # 10MB
+    backupCount: 5
+    encoding: utf8
+
+  verification:
+    class: logging.handlers.RotatingFileHandler
+    level: DEBUG
+    formatter: detailed
+    filename: logs/verification.log
+    maxBytes: 10485760  # 10MB
+    backupCount: 5
+    encoding: utf8
+
+  payment:
+    class: logging.handlers.RotatingFileHandler
+    level: DEBUG
+    formatter: detailed
+    filename: logs/payment.log
+    maxBytes: 10485760  # 10MB
+    backupCount: 5
+    encoding: utf8
+
+  performance:
+    class: logging.handlers.RotatingFileHandler
+    level: INFO
+    formatter: json
+    filename: logs/performance.log
+    maxBytes: 10485760  # 10MB
+    backupCount: 5
+    encoding: utf8
+
+loggers:
+  decentralized_gpu:
+    level: DEBUG
+    handlers: [console, file]
+    propagate: false
+
+  decentralized_gpu.verification:
+    level: DEBUG
+    handlers: [verification, error_file]
+    propagate: false
+
+  decentralized_gpu.payment:
+    level: DEBUG
+    handlers: [payment, error_file]
+    propagate: false
+
+  decentralized_gpu.performance:
+    level: INFO
+    handlers: [performance]
+    propagate: false
+
+  decentralized_gpu.network:
+    level: INFO
+    handlers: [file, error_file]
+    propagate: false
+
+root:
+  level: INFO
+  handlers: [console, error_file]

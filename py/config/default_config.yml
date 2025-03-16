@@ -1,0 +1,62 @@
+# config.yaml
+
+# Network configuration
+network:
+  address: "localhost:50051"  # Network node address
+  bootstrap_nodes:           # List of known nodes for initial connection
+    - "node1.example.com:50051"
+    - "node2.example.com:50051"
+  heartbeat_interval: 30     # Seconds between heartbeats
+  reconnect_delay: 60       # Seconds to wait before reconnection attempts
+
+# Wallet configuration
+wallet:
+  address: "your_monero_address_here"
+  rpc_url: "http://localhost:18082"  # Local wallet RPC
+  rpc_username: "username"
+  rpc_password: "password"
+  min_payment: 0.01         # Minimum XMR for payout
+  base_rate: 0.001         # Base XMR per GPU hour
+
+# GPU configuration
+gpu:
+  max_temperature: 85       # Maximum GPU temperature (Celsius)
+  max_power_usage: 250     # Maximum power usage (Watts)
+  memory_buffer: 1024      # Memory buffer to maintain (MB)
+  utilization_target: 95   # Target GPU utilization (%)
+
+# Job preferences
+job:
+  frameworks:              # Supported ML frameworks
+    - pytorch
+  min_payment_rate: 0.0005  # Minimum XMR per hour
+  max_job_duration: 86400   # Maximum job duration (seconds)
+  preferred_job_types:     # Preferred types of jobs
+    - training
+    - fine-tuning
+
+# Storage configuration
+storage:
+  work_dir: "./work"       # Directory for job working files
+  max_storage: 100        # Maximum storage usage (GB)
+  cleanup_threshold: 90    # Storage cleanup threshold (%)
+
+# Logging configuration
+logging:
+  level: "INFO"
+  file: "node.log"
+  max_size: 100          # Maximum log file size (MB)
+  backup_count: 5        # Number of backup log files
+
+# Security configuration
+security:
+  enable_secure_enclave: false  # Use secure enclave if available
+  enable_encryption: true      # Encrypt data in transit
+  allowed_ips: []             # List of allowed IP addresses (empty for any)
+
+# Performance configuration
+performance:
+  max_concurrent_jobs: 1    # Maximum concurrent jobs
+  batch_size_limit: 32     # Maximum batch size
+  prefetch_factor: 2       # Data loading prefetch factor
+  enable_amp: true         # Enable automatic mixed precision
