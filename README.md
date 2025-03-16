@@ -1,6 +1,8 @@
 # compunir
 GPUs unite using secure and private crypto transactions to distribute compute to decentralized nodes.
 
+![Logo](https://raw.githubusercontent.com/ameritusweb/compunir/main/favlogo.png)
+
 # Decentralized GPU Training Network
 
 A peer-to-peer network for distributed machine learning training with built-in verification and cryptocurrency payment systems.
