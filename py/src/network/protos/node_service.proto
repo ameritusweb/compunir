@@ -34,6 +34,26 @@ message NodeInfo {
   NetworkCapabilities network_capabilities = 4;
   repeated string supported_frameworks = 5;
   string wallet_address = 6;
+  string pow_proof = 7;
+  string stake_transaction_id = 8;
+  GeographicData geographic_data = 9;
+  NetworkStats network_stats = 10;
+}
+
+message GeographicData {
+    double latitude = 1;
+    double longitude = 2;
+    string country_code = 3;
+    string region = 4;
+    string city = 5;
+}
+
+message NetworkStats {
+    uint32 bandwidth = 1;
+    uint32 latency = 2;
+    float stability = 3;
+    uint32 connections_per_minute = 4;
+    map<string, uint32> peer_connections = 5;
 }
 
 message GPUInfo {
@@ -56,6 +76,9 @@ message RegistrationResponse {
   string assigned_node_id = 1;
   repeated string bootstrap_nodes = 2;
   NetworkConfiguration network_config = 3;
+  float reputation_score = 4;
+  uint32 pow_difficulty = 5;
+  string required_stake = 6;
 }
 
 // Job specification and management

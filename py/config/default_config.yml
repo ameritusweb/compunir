@@ -60,3 +60,33 @@ performance:
   batch_size_limit: 32     # Maximum batch size
   prefetch_factor: 2       # Data loading prefetch factor
   enable_amp: true         # Enable automatic mixed precision
+
+# Sybil Protection Settings
+sybil_protection:
+  # Minimum requirements
+  min_stake: 0.1                  # Minimum XMR stake
+  base_pow_difficulty: 5          # Base PoW difficulty
+  min_reputation: 0.3             # Minimum reputation to participate
+  
+  # Geographic protection
+  max_geo_cluster_size: 5         # Maximum nodes per geographic area
+  proximity_threshold_km: 100     # Distance threshold for clustering
+  max_nodes_per_subnet: 3         # Maximum nodes per subnet
+  
+  # Network protection
+  max_connections_per_minute: 100 # Rate limiting
+  min_peer_entropy: 2.0           # Minimum peer distribution entropy
+  
+  # Reputation settings
+  reputation_decay: 0.99          # Daily reputation decay factor
+  max_verification_history: 1000  # Maximum verification history entries
+  
+  # Response settings
+  verification_invalidation_window: 86400  # 24 hours for invalidation
+  max_response_history: 1000
+  enable_stake_seizure: false     # Whether to seize stake on high severity
+  
+  # Metrics settings
+  metrics:
+    collection_interval: 300      # 5 minutes
+    history_length: 288           # 24 hours at 5 min intervals
