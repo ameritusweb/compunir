@@ -10,7 +10,7 @@ from ..core.job_executor import JobExecutor
 from .network_interface import NetworkInterface
 from ..verification.verification_system import AdvancedVerificationSystem
 from ..payment.monero_wallet import MoneroWallet
-from ..payment.payment_processor import PaymentProcessor
+from ..payment.monero_payment_processor import MoneroPaymentProcessor
 from ..verification.sybil_protection import SybilProtectionSystem
 
 @dataclass
@@ -21,8 +21,9 @@ class NodeState:
     gpu_metrics: Dict
     last_heartbeat: float
     verification_status: Optional[str] = None
+    wallet_address: Optional[str] = None
 
-class UnifiedNodeManager:
+class NodeManager:
     """Manages node operations, security, and job execution"""
     
     def __init__(self, config: Dict):
@@ -34,7 +35,7 @@ class UnifiedNodeManager:
         self.network = NetworkInterface(config)
         self.job_executor = JobExecutor(config)
         self.verification_system = AdvancedVerificationSystem(config)
-        self.payment_processor = PaymentProcessor(config['payment'])
+        self.payment_processor = MoneroPaymentProcessor(config['payment'])
         self.sybil_protection = SybilProtectionSystem(config)  # Sybil attack protection
 
         # Node state tracking
@@ -108,7 +109,8 @@ class UnifiedNodeManager:
         try:
             node_id = node_info.get('node_id')
             logging.info(f"Processing node registration with Sybil protection for {node_id}")
-            
+            wallet_address = node_info.get('wallet_address', None) 
+
             # 1. Verify basic node information
             if not self._validate_node_info(node_info):
                 logging.warning(f"Invalid node information for {node_id}")
@@ -117,6 +119,9 @@ class UnifiedNodeManager:
                     'error': 'Invalid node information'
                 }
             
+            if not wallet_address:
+                logging.warning(f"Node {node_id} is missing a wallet address!")
+
             # 2. Verify Monero stake
             stake_verification = await self._verify_stake(
                 node_info.get('wallet_address'),
@@ -157,6 +162,17 @@ class UnifiedNodeManager:
             
             # 5. Setup individual node monitoring
             asyncio.create_task(self._monitor_node_behavior(node_id))
+            
+            # Store node state including wallet address
+            self.nodes[node_id] = NodeState(
+                status='active',
+                current_job=None,
+                gpu_metrics={},
+                last_heartbeat=time.time(),
+                wallet_address=wallet_address
+            )
+
+            logging.info(f"Node {node_id} registered with wallet address: {wallet_address}")
             
             logging.info(f"Node {node_id} successfully registered with Sybil protection")
             return {

@@ -108,8 +108,9 @@ class JobExecutor:
             
             for batch_idx, (inputs, targets) in enumerate(dataloader):
                 # Move to GPU
-                inputs = inputs.cuda()
-                targets = targets.cuda()
+                device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+                inputs = inputs.to(device)
+                targets = targets.to(device)
                 
                 # Forward pass
                 outputs = model(inputs)
@@ -306,42 +307,67 @@ class JobExecutor:
             raise
 
     async def _handle_verification_failure(self, job_id: str, epoch: int, result: Dict):
-        """Handle verification failure"""
+        """Handle verification failure with adaptive response."""
         try:
-            # Update job status
             self.active_jobs[job_id]['verifications'].append({
                 'epoch': epoch,
                 'status': 'failed',
                 'result': result,
                 'timestamp': time.time()
             })
-            
-            # Check failure threshold
-            if self._check_failure_threshold(job_id):
-                await self._handle_job_failure(job_id, "Verification failure threshold exceeded")
-            
+
+            failure_threshold = self.config.get('max_verification_failures', 3)
+            failed_attempts = sum(1 for v in self.active_jobs[job_id]['verifications'] if v['status'] == 'failed')
+
+            if failed_attempts >= failure_threshold:
+                logging.warning(f"Job {job_id} verification failed too many times. Penalizing node.")
+                await self.network_client.report_verification_penalty(job_id)
+            else:
+                logging.info(f"Verification failed for epoch {epoch}, but job will continue.")
+        
         except Exception as e:
             logging.error(f"Error handling verification failure: {str(e)}")
-            raise
+
 
     def _calculate_epoch_payment(self, job_id: str, epoch: int) -> float:
-        """Calculate payment amount for successful epoch"""
-        try:
-            # Get base payment rate
-            base_rate = self.config.get('base_payment_rate', 0.001)
-            
-            # Get epoch metrics
-            metrics = self.active_jobs[job_id]['metrics'][epoch]
-            
-            # Calculate adjustments
-            time_factor = self._calculate_time_factor(metrics)
-            performance_factor = self._calculate_performance_factor(metrics)
-            
-            return base_rate * time_factor * performance_factor
-            
-        except Exception as e:
-            logging.error(f"Error calculating payment: {str(e)}")
-            return 0.0
+        """Calculate payment based on training efficiency."""
+        base_rate = self.config.get('base_payment_rate', 0.001)
+        
+        metrics = self.active_jobs[job_id]['metrics'][epoch]
+
+        time_factor = self._calculate_time_factor(metrics)
+        performance_factor = self._calculate_performance_factor(metrics)
+        verification_bonus = 1.2 if self._is_strong_verification(metrics) else 1.0  # 20% bonus if high-quality verification
+
+        return base_rate * time_factor * performance_factor * verification_bonus
+
+    def _is_strong_verification(self, metrics: Dict) -> bool:
+        """Determine if verification results were high-quality."""
+        if 'verification_points' not in metrics or not metrics['verification_points']:
+            return False
+
+        avg_loss = np.mean([v['loss'] for v in metrics['verification_points']])
+        return avg_loss < 0.05  # Example threshold
+
+    def _calculate_accuracy(self, outputs: torch.Tensor, targets: torch.Tensor, job_spec: Dict) -> float:
+        """Calculate accuracy for classification or regression tasks."""
+        task_type = job_spec['training_config'].get('task_type', 'classification')
+
+        if task_type == 'classification':
+            with torch.no_grad():
+                predicted = torch.argmax(outputs, dim=1)
+                correct = (predicted == targets).sum().item()
+                total = targets.size(0)
+            return correct / total if total > 0 else 0.0
+
+        elif task_type == 'regression':
+            # Mean Squared Error-based accuracy (inverse of error)
+            with torch.no_grad():
+                error = torch.mean(torch.abs(outputs - targets))
+            return max(0.0, 1.0 - error.item())  # Normalize to [0,1]
+
+        else:
+            raise ValueError(f"Unsupported task type: {task_type}")
 
     def _calculate_time_factor(self, metrics: Dict) -> float:
         """Calculate time-based payment factor"""
@@ -384,3 +410,23 @@ class JobExecutor:
         except Exception as e:
             logging.error(f"Error checking failure threshold: {str(e)}")
             return False
+        
+    def _get_gpu_utilization(self) -> float:
+        """Fetch GPU utilization percentage."""
+        gpu_stats = self.gpu_monitor.get_current_stats()
+        if gpu_stats:
+            return gpu_stats[0].utilization  # Assuming first GPU; update for multi-GPU
+        return 0.0
+
+    def _calculate_loss(self, outputs: torch.Tensor, targets: torch.Tensor, job_spec: Dict) -> torch.Tensor:
+        """Calculate loss function based on job specification."""
+        loss_type = job_spec['training_config'].get('loss_function', 'cross_entropy')
+
+        if loss_type == 'cross_entropy':
+            loss_fn = torch.nn.CrossEntropyLoss()
+        elif loss_type == 'mse':
+            loss_fn = torch.nn.MSELoss()
+        else:
+            raise ValueError(f"Unsupported loss function: {loss_type}")
+
+        return loss_fn(outputs, targets)

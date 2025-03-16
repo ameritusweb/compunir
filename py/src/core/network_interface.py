@@ -1,4 +1,5 @@
 import asyncio
+from asyncio import Lock
 import logging
 from typing import Dict, Optional, List
 import time
@@ -17,6 +18,7 @@ class NetworkInterface:
     """Core network interface handling node communication and management"""
     
     def __init__(self, config: Dict):
+        self._node_lock = Lock()
         self.config = config
         self.active_nodes: Dict[str, NodeInfo] = {}
         self.logger = logging.getLogger(__name__)
@@ -61,17 +63,14 @@ class NetworkInterface:
             raise
 
     async def remove_node(self, node_id: str):
-        """Remove a node from the network"""
-        try:
+        """Remove a node safely from the network"""
+        async with self._node_lock:  # Lock during removal
             if node_id in self.active_nodes:
                 node = self.active_nodes[node_id]
                 if node.current_job:
                     await self._handle_job_interruption(node.current_job)
                 del self.active_nodes[node_id]
                 self.logger.info(f"Removed node: {node_id}")
-        except Exception as e:
-            self.logger.error(f"Failed to remove node: {str(e)}")
-            raise
 
     async def update_node_status(self, node_id: str, status: Dict) -> Dict:
         """Update node status and get required actions"""
@@ -104,23 +103,26 @@ class NetworkInterface:
         return self.active_nodes.get(node_id)
 
     async def _monitor_nodes(self):
-        """Monitor node health and cleanup inactive nodes"""
+        """Monitor node health and remove inactive nodes"""
         while True:
             try:
                 current_time = time.time()
                 timeout = self.config.get('node_timeout', 300)
-                
-                # Find and remove inactive nodes
+
                 inactive_nodes = [
                     node_id for node_id, node in self.active_nodes.items()
                     if current_time - node.last_heartbeat > timeout
                 ]
-                
+
+                if inactive_nodes:
+                    self.logger.warning(f"Removing {len(inactive_nodes)} inactive nodes: {inactive_nodes}")
+
                 for node_id in inactive_nodes:
                     await self.remove_node(node_id)
-                
+
+                self.logger.info(f"Active nodes: {len(self.active_nodes)}")
                 await asyncio.sleep(60)
-                
+
             except asyncio.CancelledError:
                 break
             except Exception as e:
@@ -133,12 +135,11 @@ class NetworkInterface:
         self.logger.warning(f"Job {job_id} interrupted due to node disconnection")
 
     def _generate_node_id(self, node_info: Dict) -> str:
-        """Generate unique node ID"""
+        """Generate a unique, deterministic node ID based on GPU UUID and address"""
         import hashlib
-        import uuid
-        
-        node_data = f"{node_info['address']}:{uuid.uuid4()}"
-        return hashlib.sha256(node_data.encode()).hexdigest()[:16]
+
+        unique_data = f"{node_info['address']}:{node_info['gpu_info'].get('uuid', 'unknown')}"
+        return hashlib.sha256(unique_data.encode()).hexdigest()[:16]
 
     def _is_node_active(self, node: NodeInfo) -> bool:
         """Check if node is currently active"""
@@ -167,9 +168,12 @@ class NetworkInterface:
         }
 
     def _check_resource_usage(self, node: NodeInfo) -> bool:
-        """Check if node is exceeding resource limits"""
-        # Implementation would check GPU metrics
-        return False
+        """Check if node is exceeding resource limits based on GPU usage"""
+        gpu_utilization = node.gpu_info.get('utilization', 0)
+        max_utilization = self.config.get('max_gpu_utilization', 90)
+
+        return gpu_utilization > max_utilization
+
 
     def _has_pending_tasks(self, node: NodeInfo) -> bool:
         """Check if node has pending tasks"""

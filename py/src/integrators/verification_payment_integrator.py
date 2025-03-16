@@ -4,16 +4,16 @@ from typing import Dict, Optional, List
 from decimal import Decimal
 import time
 
-from ..verification import VerificationSystem, VerificationProof
-from ..payment import PaymentProcessor, MoneroPaymentProcessor
-from ..core.node_manager import NodeManager
+from ..verification.verification_system import AdvancedVerificationSystem, VerificationProof
+from ..payment.monero_payment_processor import MoneroPaymentProcessor
+from ..core.unified_node_manager import NodeManager
 
 class VerificationPaymentIntegrator:
     """Integrates verification results with payment processing"""
     
     def __init__(self, 
-                 verification_system: VerificationSystem,
-                 payment_processor: PaymentProcessor,
+                 verification_system: AdvancedVerificationSystem,
+                 payment_processor: MoneroPaymentProcessor,
                  node_manager: NodeManager,
                  config: Dict):
         self.verification_system = verification_system
