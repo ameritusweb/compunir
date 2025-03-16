@@ -87,10 +87,11 @@ pytest tests/advanced
 
 Detailed documentation is available in the `docs/` directory:
 
-- [Installation Guide](docs/installation.md)
-- [Configuration Guide](docs/configuration.md)
-- [Verification System](docs/verification.md)
-- [Payment System](docs/payment.md)
+- [Installation Guide](docs/INSTALL.md)
+- [Configuration Guide](docs/CONFIGURE.md)
+- [Dashboard Guide](docs/DASHBOARD.md)
+- [Verification System](docs/VERIFICATION.md)
+- [Payment System](docs/PAYMENT.md)
 
 ## Contributing
 
