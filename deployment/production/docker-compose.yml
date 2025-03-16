@@ -1,0 +1,105 @@
+version: '3.8'
+
+services:
+  dashboard:
+    build: 
+      context: .
+      dockerfile: Dockerfile
+    container_name: node-dashboard
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - NODE_API_URL=${NODE_API_URL}
+      - NODE_WS_URL=${NODE_WS_URL}
+      - AUTH_TOKEN=${AUTH_TOKEN}
+    volumes:
+      - dashboard-data:/app/data
+      - ./logs:/app/logs
+      - ./config:/app/config
+    networks:
+      - node-network
+    depends_on:
+      - redis
+      - prometheus
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  redis:
+    image: redis:alpine
+    container_name: node-dashboard-redis
+    restart: unless-stopped
+    volumes:
+      - redis-data:/data
+    networks:
+      - node-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: node-dashboard-prometheus
+    restart: unless-stopped
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+    networks:
+      - node-network
+    ports:
+      - "9090:9090"
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: node-dashboard-grafana
+    restart: unless-stopped
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD}
+      - GF_USERS_ALLOW_SIGN_UP=false
+    networks:
+      - node-network
+    ports:
+      - "3001:3000"
+    depends_on:
+      - prometheus
+
+  nginx:
+    image: nginx:alpine
+    container_name: node-dashboard-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./ssl:/etc/nginx/ssl:ro
+      - ./logs/nginx:/var/log/nginx
+    networks:
+      - node-network
+    depends_on:
+      - dashboard
+
+volumes:
+  dashboard-data:
+  redis-data:
+  prometheus-data:
+  grafana-data:
+
+networks:
+  node-network:
+    driver: bridge

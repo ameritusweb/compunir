@@ -1,0 +1,190 @@
+# prometheus/node-metrics.yml
+
+# GPU metrics
+- job_name: 'gpu_metrics'
+  scrape_interval: 5s
+  static_configs:
+    - targets: ['localhost:9100']
+  metrics_path: '/metrics'
+  metric_relabel_configs:
+    - source_labels: [__name__]
+      regex: 'gpu_.*'
+      action: keep
+
+# Node metrics
+- job_name: 'node_metrics'
+  scrape_interval: 15s
+  static_configs:
+    - targets: ['localhost:9100']
+  metrics_path: '/metrics'
+  metric_relabel_configs:
+    - source_labels: [__name__]
+      regex: 'node_.*'
+      action: keep
+
+# Application metrics
+- job_name: 'app_metrics'
+  scrape_interval: 10s
+  static_configs:
+    - targets: ['dashboard:3000']
+  metrics_path: '/metrics'
+
+# Custom metrics
+- job_name: 'custom_metrics'
+  scrape_interval: 30s
+  static_configs:
+    - targets: ['dashboard:3000']
+  metrics_path: '/custom-metrics'
+  metric_relabel_configs:
+    - source_labels: [type]
+      regex: 'verification|earnings|performance'
+      action: keep
+
+# Alert rules
+groups:
+  - name: gpu_alerts
+    rules:
+      - alert: HighGPUTemperature
+        expr: gpu_temperature > 80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "GPU temperature is high"
+          description: "GPU temperature has been above 80°C for 5 minutes"
+
+      - alert: GPUMemoryNearCapacity
+        expr: (gpu_memory_used / gpu_memory_total) * 100 > 90
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "GPU memory usage high"
+          description: "GPU memory usage has been above 90% for 5 minutes"
+
+  - name: node_alerts
+    rules:
+      - alert: LowDiskSpace
+        expr: node_filesystem_avail_bytes / node_filesystem_size_bytes * 100 < 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Low disk space"
+          description: "Disk space usage is above 90%"
+
+      - alert: HighLoadAverage
+        expr: node_load1 > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High system load"
+          description: "System load is high for 5 minutes"
+
+  - name: application_alerts
+    rules:
+      - alert: JobFailureRate
+        expr: rate(failed_jobs_total[1h]) / rate(total_jobs[1h]) * 100 > 10
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High job failure rate"
+          description: "Job failure rate is above 10% for the last 15 minutes"
+
+      - alert: VerificationFailureRate
+        expr: rate(failed_verifications_total[1h]) / rate(total_verifications[1h]) * 100 > 20
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High verification failure rate"
+          description: "Verification failure rate is above 20% for the last 15 minutes"
+
+# Recording rules
+  - name: recording_rules
+    rules:
+      - record: job:success_rate:ratio
+        expr: rate(successful_jobs_total[1h]) / rate(total_jobs[1h])
+
+      - record: verification:success_rate:ratio
+        expr: rate(successful_verifications_total[1h]) / rate(total_verifications[1h])
+
+      - record: earnings:hourly:xmr
+        expr: rate(total_earnings[1h])
+
+      - record: gpu:utilization:avg_1h
+        expr: avg_over_time(gpu_utilization[1h])
+
+# Custom metrics definitions
+custom_metrics:
+  - name: job_metrics
+    type: gauge
+    help: "Job-related metrics"
+    metrics:
+      - name: active_jobs
+        help: "Number of currently active jobs"
+      - name: queued_jobs
+        help: "Number of jobs in queue"
+      - name: verification_queue
+        help: "Number of jobs awaiting verification"
+
+  - name: earnings_metrics
+    type: counter
+    help: "Earnings-related metrics"
+    metrics:
+      - name: total_earnings
+        help: "Total earnings in XMR"
+      - name: pending_earnings
+        help: "Pending earnings in XMR"
+      - name: daily_earnings
+        help: "Daily earnings in XMR"
+
+  - name: performance_metrics
+    type: histogram
+    help: "Performance-related metrics"
+    metrics:
+      - name: job_duration_seconds
+        help: "Job execution duration in seconds"
+        buckets: [30, 60, 120, 300, 600, 1800, 3600]
+      - name: verification_time_seconds
+        help: "Verification process duration in seconds"
+        buckets: [5, 10, 30, 60, 120, 300]
+
+# Storage configuration
+storage:
+  tsdb:
+    path: /prometheus
+    retention:
+      time: 30d
+      size: 50GB
+    wal:
+      retention:
+        time: 12h
+
+# Global settings
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  scrape_timeout: 10s
+  external_labels:
+    monitor: 'node-dashboard'
+
+# Remote write configuration (optional)
+remote_write:
+  - url: 'http://remote-storage:9090/api/v1/write'
+    remote_timeout: 30s
+    queue_config:
+      capacity: 10000
+      max_shards: 200
+      max_samples_per_send: 500
+      batch_send_deadline: 5s
+      min_backoff: 30ms
+      max_backoff: 100ms
+
+# Remote read configuration (optional)
+remote_read:
+  - url: 'http://remote-storage:9090/api/v1/read'
+    read_recent: true
+    remote_timeout: 30s
