@@ -1,3 +1,10 @@
+import logging
+from .distribution_manager import DataDistributionManager
+from .data_shard import DataShard
+from .data_verification_proof import DataVerificationProof
+from typing import Dict, List, Tuple, Optional
+import time
+
 class VerifiedDataDistribution:
     """Integrate data distribution with verification system"""
     

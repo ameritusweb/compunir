@@ -8,10 +8,11 @@ from dataclasses import dataclass
 from ..utils.gpu_monitoring import GPUMonitor
 from ..core.job_executor import JobExecutor
 from .network_interface import NetworkInterface
-from ..verification.verification_system import AdvancedVerificationSystem
+from ..verification.unified_verification_system import VerificationSystem
 from ..payment.monero_wallet import MoneroWallet
 from ..payment.monero_payment_processor import MoneroPaymentProcessor
 from ..verification.sybil_protection import SybilProtectionSystem
+from ..data_distribution.distribution_manager import DataDistributionManager
 
 @dataclass
 class NodeState:
@@ -34,8 +35,9 @@ class NodeManager:
         self.gpu_monitor = GPUMonitor()
         self.network = NetworkInterface(config)
         self.job_executor = JobExecutor(config)
-        self.verification_system = AdvancedVerificationSystem(config)
+        self.verification_system = VerificationSystem(config)
         self.payment_processor = MoneroPaymentProcessor(config['payment'])
+        self.distribution_manager = DataDistributionManager(config['distribution'])
         self.sybil_protection = SybilProtectionSystem(config)  # Sybil attack protection
 
         # Node state tracking
@@ -71,6 +73,8 @@ class NodeManager:
             self._monitoring_task = asyncio.create_task(self._monitor_gpu())
             self._heartbeat_task = asyncio.create_task(self._send_heartbeats())
             self._sybil_monitoring_task = asyncio.create_task(self._monitor_suspicious_activity())
+            
+            await self.distribution_manager.start()
 
             self.state.status = 'active'
             self.logger.info("Unified Node Manager started successfully")
@@ -98,6 +102,8 @@ class NodeManager:
             await self.network.stop()
             self.gpu_monitor.cleanup()
             
+            await self.distribution_manager.stop()
+
             self.logger.info("Node manager stopped")
             
         except Exception as e:

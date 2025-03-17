@@ -4,6 +4,7 @@ import time
 from typing import Dict, List, Set, Optional, Tuple, Any
 import random
 import hashlib
+import json
 import numpy as np
 from dataclasses import dataclass
 import pyarrow as pa
@@ -13,6 +14,8 @@ import socket
 import struct
 import zlib
 from concurrent.futures import ThreadPoolExecutor
+from .data_shard import DataShard
+from .data_verification_proof import DataVerificationProof
 
 @dataclass
 class DistributionNode:

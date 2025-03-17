@@ -1,3 +1,9 @@
+from typing import Dict
+import logging
+import time
+from .distribution_manager import DataDistributionManager
+import psutil
+
 class DistributionPerformanceMonitor:
     """Monitor performance of data distribution system"""
     
@@ -128,7 +134,6 @@ class DistributionPerformanceMonitor:
             # For cross-platform, could use psutil
             
             # Example with psutil:
-            import psutil
             
             # Get current network stats
             net_io = psutil.net_io_counters()
