@@ -1,0 +1,96 @@
+# Local Configuration Template
+# Override values from default_config.yml, distribution_config.yml, and logging_config.yml
+
+# Network configuration
+network:
+  address: "localhost:50051"  # Your node's address
+  bootstrap_nodes:            # Nodes to connect to on startup
+    - "seed1.compunir.org:50051"
+    - "seed2.compunir.org:50051"
+  heartbeat_interval: 30      # Seconds between heartbeats
+  reconnect_delay: 60         # Seconds to wait before reconnection attempts
+
+# Wallet configuration
+wallet:
+  address: "your_monero_address_here"  # Your Monero wallet address
+  rpc_url: "http://localhost:18082"     # Local wallet RPC
+  rpc_username: "username"              # RPC authentication
+  rpc_password: "password"              # RPC authentication
+  min_payment: 0.01                     # Minimum XMR for payout
+  base_rate: 0.001                      # Base XMR per GPU hour
+
+# GPU configuration
+gpu:
+  max_temperature: 85        # Maximum GPU temperature (Celsius)
+  max_power_usage: 250       # Maximum power usage (Watts)
+  memory_buffer: 1024        # Memory buffer to maintain (MB)
+  utilization_target: 95     # Target GPU utilization (%)
+
+# Job preferences
+job:
+  frameworks:                # Supported ML frameworks
+    - pytorch
+  min_payment_rate: 0.0005   # Minimum XMR per hour
+  max_job_duration: 86400    # Maximum job duration (seconds)
+  preferred_job_types:       # Preferred types of jobs
+    - training
+    - fine-tuning
+
+# Storage configuration
+storage:
+  work_dir: "./work"         # Directory for job working files
+  max_storage: 100           # Maximum storage usage (GB)
+  cleanup_threshold: 90      # Storage cleanup threshold (%)
+  data_retention_days: 7     # Days to keep data after job completion
+
+# Verification settings
+verification:
+  min_verifiers: 3
+  max_verifiers: 7
+  verification_threshold: 0.67
+  verification_timeout: 300
+  verification_retry_count: 2
+  max_verification_failures: 3
+
+# Distribution overrides (overrides settings from distribution_config.yml)
+distribution:
+  # Server configuration
+  network:
+    server_host: "0.0.0.0"    # Listen on all interfaces
+    server_port: 7000
+    transfer_protocol: "socket"  # "http" or "socket"
+  
+  # Storage settings
+  storage:
+    storage_dir: "data/shards"
+    max_cache_size: 1073741824  # 1GB
+  
+  # Default replication factor
+  default_replication_factor: 2
+  
+  # Node selection weights
+  selection_weights:
+    capacity: 0.4
+    connection_quality: 0.3
+    geographical_distance: 0.2
+    reliability_score: 0.1
+
+# Sybil protection settings
+sybil_protection:
+  min_stake: 0.1                  # Minimum XMR stake
+  base_pow_difficulty: 5          # Base PoW difficulty
+  min_reputation: 0.3             # Minimum reputation to participate
+  max_geo_cluster_size: 5         # Maximum nodes per geographic area
+  proximity_threshold_km: 100     # Distance threshold for clustering
+
+# Logging overrides (overrides settings from logging_config.yml)
+logging:
+  level: "INFO"              # Main logging level
+  file: "logs/node.log"      # Main log file
+  
+  # Logger-specific settings
+  loggers:
+    decentralized_gpu.verification:
+      level: "DEBUG"
+    decentralized_gpu.payment:
+      level: "INFO"
